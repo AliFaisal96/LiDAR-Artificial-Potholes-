@@ -8,6 +8,7 @@ import pandas as pd
 
 # Print the current working directory
 print("Current Working Directory:", os.getcwd())
+os.chdir('C:/Users\Ali\OneDrive - UBC\Desktop\Ph.D. Work\Potholes')
 
 class PointCloudProcessor:
     def __init__(self):
@@ -39,142 +40,95 @@ class PointCloudProcessor:
             print("Unsupported file format.")
             return None
 
-    def create_artificial_potholes_quadratic(self, point_cloud, num_potholes, max_radius, max_depth):
-        points = np.asarray(point_cloud.points)
+    def get_centerline_from_txt(self, txt_file_path):
+        centerline = []
+        with open(txt_file_path, 'r') as file:
+            for line in file:
+                x, y = map(float, line.strip().split(','))
+                centerline.append((x, y))
+        return centerline
 
-        # Initialize the colors array if the point cloud has colors
+    def calculate_tangent(self, point, next_point):
+        dx = next_point[0] - point[0]
+        dy = next_point[1] - point[1]
+        tangent = np.array([dx, dy])
+        norm = np.linalg.norm(tangent)
+        return tangent / norm if norm != 0 else tangent
+
+    def is_overlapping(self, new_pothole, existing_potholes, min_distance):
+        for pothole in existing_potholes:
+            distance = np.sqrt((new_pothole[0] - pothole[0]) ** 2 + (new_pothole[1] - pothole[1]) ** 2)
+            if distance < min_distance:
+                return True
+        return False
+
+    def is_too_close_on_y_axis(self, new_pothole, existing_potholes, y_threshold):
+        for pothole in existing_potholes:
+            if abs(new_pothole[1] - pothole[1]) < y_threshold:
+                return True
+        return False
+
+    def create_artificial_potholes_bowl_shaped(self, point_cloud, road_centerline, num_potholes, max_radius, max_depth, road_width):
+        points = np.asarray(point_cloud.points)
         if point_cloud.has_colors():
             colors = np.asarray(point_cloud.colors)
         else:
-            colors = np.ones((len(points), 3)) * 0.5  # Grey color for all points
+            colors = np.ones((len(points), 3)) * 0.5
 
-        # Generate pothole specifications and modify points accordingly
-        for _ in range(num_potholes):
-            center_x = random.uniform(points[:, 0].min(), points[:, 0].max())
-            center_y = random.uniform(points[:, 1].min(), points[:, 1].max())
-            radius = random.uniform(0.01, max_radius)
-            depth = random.uniform(0.01, max_depth)
-            pothole_color = np.random.rand(3)  # Random color for the pothole
+        pothole_details = []
+        existing_potholes = []
+        y_threshold = road_width / 3
 
-            # Calculate distances from the pothole center for all points
+        while len(pothole_details) < num_potholes:
+            idx = random.randint(0, len(road_centerline) - 2)
+            point, next_point = road_centerline[idx], road_centerline[idx + 1]
+
+            tangent = self.calculate_tangent(point, next_point)
+            perp_vector = np.array([-tangent[1], tangent[0]])
+
+            offset = random.uniform(-road_width / 2, road_width / 2)
+            center_x, center_y = point[0] + offset * perp_vector[0], point[1] + offset * perp_vector[1]
+
+            radius = random.uniform(0.05, max_radius)
+            depth = random.uniform(0.02, max_depth)
+            pothole_color = np.random.rand(3)
+
+            # Check if new pothole overlaps with existing ones and is not too close on the y-axis
+            overlapping = self.is_overlapping((center_x, center_y), existing_potholes, 2 * radius)
+            too_close_on_y = self.is_too_close_on_y_axis((center_x, center_y), existing_potholes, y_threshold)
+            if overlapping or too_close_on_y:
+                continue  # Skip this iteration and try a new pothole
+
             distances = np.sqrt((points[:, 0] - center_x) ** 2 + (points[:, 1] - center_y) ** 2)
-
-            # Identify points within the pothole radius
             pothole_indices = distances < radius
 
-            # Displace the Z values of points within the pothole
-            depression_depths = depth * (1 - (distances[pothole_indices] / radius) ** 2)
-            points[pothole_indices, 2] -= depression_depths
-            colors[pothole_indices] = pothole_color  # Color the pothole points
+            if np.any(pothole_indices) and np.sum(pothole_indices) >= 100:
+                num_pothole_points = np.sum(pothole_indices)
+                displacement = np.sqrt(radius ** 2 - distances[pothole_indices] ** 2)
+                normalized_displacement = displacement / np.max(displacement)
+                depression_depths = depth * normalized_displacement
+                points[pothole_indices, 2] -= depression_depths
+                colors[pothole_indices] = pothole_color
 
-        # Create and return the modified point cloud
+                print(
+                    f"Pothole {len(pothole_details)}: Center=({center_x:.2f}, {center_y:.2f}), Radius={radius:.2f}, Depth={depth:.2f}, Points={num_pothole_points}")
+                pothole_details.append({'center_x': center_x, 'center_y': center_y, 'radius': radius, 'depth': depth, 'num_points': num_pothole_points})
+                existing_potholes.append((center_x, center_y, radius))
+            else:
+                print(f"Pothole {len(pothole_details)} skipped: No points within radius")
+
         modified_point_cloud = o3d.geometry.PointCloud()
         modified_point_cloud.points = o3d.utility.Vector3dVector(points)
-        modified_point_cloud.colors = o3d.utility.Vector3dVector(colors)  # Set the colors
+        modified_point_cloud.colors = o3d.utility.Vector3dVector(colors)
         return modified_point_cloud
-
-
 # Usage
 processor = PointCloudProcessor()
 cloud = processor.process_file('pothole_dataset/Hwy22_1_cc.ply')
+road_centerline = processor.get_centerline_from_txt('pothole_dataset/Hwy22_1_cc_centerline.txt.txt')
+num_potholes = 20
+max_radius = 0.3
+max_depth = 0.1
+road_width = 7
 
-# Parameters for artificial potholes
-num_potholes = 1000  # Number of potholes to create
-max_radius = 0.5  # Maximum radius of potholes
-max_depth = 0.2  # Maximum depth of potholes (realistic value)
-
-
-# Create artificial potholes with a quadratic depth model
-cloud_with_potholes = processor.create_artificial_potholes_quadratic(cloud, num_potholes, max_radius, max_depth)
-
-# Visualize the point cloud to verify the potholes
-o3d.visualization.draw_geometries([cloud_with_potholes])
-
-
-# Now, pothole_details contains information about each artificial pothole
-# for pothole in pothole_details:
-#     print(f"Pothole at X: {pothole['center_x']}, Y: {pothole['center_y']}, Radius: {pothole['radius']}, Depth: {pothole['depth']}")
-o3d.io.write_point_cloud("Outputs/Hwy22_1_cc_potholes.ply", cloud_with_potholes)
-
-#Pothole Detection
-class PotholeDetector:
-    def __init__(self, curvature_threshold, neighborhood_radius):
-        self.curvature_threshold = curvature_threshold
-        self.neighborhood_radius = neighborhood_radius
-
-    def estimate_curvature(self, point_cloud):
-        # Step 1: Estimate the surface curvature for each point in the cloud
-        pcd_tree = o3d.geometry.KDTreeFlann(point_cloud)
-        curvatures = []
-
-        for i in range(len(np.asarray(point_cloud.points))):
-            if i % 10000 == 0:  # Print a message every 10,000 points
-                print(f"Processing point {i}/{len(point_cloud.points)}")
-            # Find neighbors of a point
-            [_, idx, _] = pcd_tree.search_radius_vector_3d(point_cloud.points[i], self.neighborhood_radius)
-            # Estimate the local surface using neighbors
-            if len(idx) < 3:  # Not enough points to fit a plane
-                curvatures.append(0)
-                continue
-            neighbors = np.asarray(point_cloud.points)[idx, :]
-            covariance_matrix = np.cov(neighbors.T)
-            eigenvalues, _ = np.linalg.eig(covariance_matrix)
-            # Curvature is the smallest eigenvalue divided by the sum of all eigenvalues
-            curvature = np.min(eigenvalues) / np.sum(eigenvalues)
-            curvatures.append(curvature)
-
-        curvatures = np.array(curvatures)
-        return point_cloud, curvatures
-
-    def segment_potholes(self, point_cloud, curvatures):
-        # Convert Open3D PointCloud to NumPy array for indexing
-        points_np = np.asarray(point_cloud.points)
-        # Segment the point cloud based on the curvature threshold
-        pothole_points = points_np[curvatures > self.curvature_threshold]
-        # Convert the segmented points back to an Open3D PointCloud
-        pothole_cloud = o3d.geometry.PointCloud()
-        pothole_cloud.points = o3d.utility.Vector3dVector(pothole_points)
-        return pothole_cloud
-
-    def visualize_potholes(self, road_cloud, pothole_cloud):
-        # Step 5: Visualize the detection
-        road_cloud.paint_uniform_color([0.6, 0.6, 0.6])  # Grey color for road
-        pothole_cloud.paint_uniform_color([1, 0, 0])  # Red color for potholes
-        o3d.visualization.draw_geometries([road_cloud, pothole_cloud])
-
-    def calculate_pothole_depth(self, pothole_cloud):
-        if pothole_cloud.is_empty():
-            print("No potholes detected.")
-            return
-
-        # Use DBSCAN to cluster the pothole cloud
-        with o3d.utility.VerbosityContextManager(
-                o3d.utility.VerbosityLevel.Debug) as cm:
-            labels = np.array(pothole_cloud.cluster_dbscan(eps=0.05, min_points=10))
-
-        max_label = labels.max()
-        print(f"Detected {max_label + 1} potholes.")
-
-        for i in range(max_label + 1):
-            cluster = pothole_cloud.select_by_index(np.where(labels == i)[0])
-            z_values = np.asarray(cluster.points)[:, 2]
-            depth = np.max(z_values) - np.min(z_values)
-            print(f"Estimated depth of pothole {i}: {depth}")
-
-    def process_point_cloud(self, file_path):
-        # Load the point cloud
-        point_cloud = o3d.io.read_point_cloud(file_path)
-        # Estimate curvatures
-        point_cloud, curvatures = self.estimate_curvature(point_cloud)
-        # Segment potholes based on curvature
-        pothole_cloud = self.segment_potholes(point_cloud, curvatures)
-        # Visualize the potholes
-        self.visualize_potholes(point_cloud, pothole_cloud)
-        # Calculate and print out the depth of each pothole
-        self.calculate_pothole_depth(pothole_cloud)
-        return pothole_cloud
-
-# Usage
-detector = PotholeDetector(curvature_threshold=0.001, neighborhood_radius=0.5)
-pothole_cloud = detector.process_point_cloud('Outputs/Hwy22_1_cc_halfpotholes5.ply')
-o3d.io.write_point_cloud("Outputs/Hwy22_1_segpothole.ply", pothole_cloud)
+cloud_with_potholes = processor.create_artificial_potholes_bowl_shaped(cloud, road_centerline, num_potholes, max_radius, max_depth, road_width)
+o3d.io.write_point_cloud("Outputs/Hwy22_1_cc_potholes4.ply", cloud_with_potholes)

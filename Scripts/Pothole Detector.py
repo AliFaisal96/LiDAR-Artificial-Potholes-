@@ -14,7 +14,7 @@ class PotholeDetector:
         curvatures = []
 
         for i in range(len(np.asarray(point_cloud.points))):
-            if i % 10000 == 0:  # Print a message every 10,000 points
+            if i % 1000000 == 0:  # Print a message every 10,000 points
                 print(f"Processing point {i}/{len(point_cloud.points)}")
             # Find neighbors of a point
             [_, idx, _] = pcd_tree.search_radius_vector_3d(point_cloud.points[i], self.neighborhood_radius)
@@ -56,16 +56,19 @@ class PotholeDetector:
         # Use DBSCAN to cluster the pothole cloud
         with o3d.utility.VerbosityContextManager(
                 o3d.utility.VerbosityLevel.Debug) as cm:
-            labels = np.array(pothole_cloud.cluster_dbscan(eps=0.05, min_points=10))
+            labels = np.array(pothole_cloud.cluster_dbscan(eps=0.1, min_points=50))
 
         max_label = labels.max()
         print(f"Detected {max_label + 1} potholes.")
 
         for i in range(max_label + 1):
+            cluster_indices = np.where(labels == i)[0]
             cluster = pothole_cloud.select_by_index(np.where(labels == i)[0])
             z_values = np.asarray(cluster.points)[:, 2]
             depth = np.max(z_values) - np.min(z_values)
-            print(f"Estimated depth of pothole {i}: {depth}")
+            num_points_in_cluster = len(cluster_indices)
+            print(f"Pothole {i}: Depth = {depth}, Number of points = {num_points_in_cluster}")
+
 
     def process_point_cloud(self, file_path):
         # Load the point cloud
@@ -81,7 +84,6 @@ class PotholeDetector:
         return pothole_cloud
 
 # Usage
-detector = PotholeDetector(curvature_threshold=0.003, neighborhood_radius=0.25)
-pothole_cloud = detector.process_point_cloud('Outputs/ ')
-o3d.io.write_point_cloud("Outputs/Hwy22_1_segpothole3.ply", pothole_cloud)
-
+detector = PotholeDetector(curvature_threshold=0.003, neighborhood_radius=0.3)
+pothole_cloud = detector.process_point_cloud('Outputs/Hwy22_1_cc_potholes4.ply')
+o3d.io.write_point_cloud("Outputs/Hwy22_1_segpothole13.ply", pothole_cloud)
